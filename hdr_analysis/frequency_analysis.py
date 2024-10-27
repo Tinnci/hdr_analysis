@@ -67,6 +67,7 @@ class FrequencyAnalyzer:
             ps_plot_path = os.path.join(self.analysis_dir, f"{filename}_功率谱.png")
             plt.savefig(ps_plot_path, bbox_inches='tight', pad_inches=0)
             plt.close()
+            self.logger.info(f"保存功率谱图: {ps_plot_path}")
             return ps_plot_path
         except Exception as e:
             self.logger.error(f"保存功率谱图失败: {e}")
@@ -85,6 +86,7 @@ class FrequencyAnalyzer:
             entropy_plot_path = os.path.join(self.analysis_dir, f"{filename}_频域熵.png")
             plt.savefig(entropy_plot_path, bbox_inches='tight', pad_inches=0)
             plt.close()
+            self.logger.info(f"保存频域熵图: {entropy_plot_path}")
             return entropy_plot_path
         except Exception as e:
             self.logger.error(f"保存频域熵图失败: {e}")
