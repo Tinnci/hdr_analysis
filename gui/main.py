@@ -42,8 +42,8 @@ class AnalyzerThread(QThread):
     def run(self):
         try:
             self.analyzer.analyze()
-            # 读取分析报告
-            if not self.analyzer.only_3d:
+            # 根据分析选项决定是否加载结果
+            if self.analyzer.analyses.get('statistical', False) or self.analyzer.analyses.get('frequency', False):
                 results = self.load_results()
             else:
                 results = []
