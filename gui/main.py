@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QProgressBar, QMessageBox, QTabWidget,
     QScrollArea, QSlider, QTextEdit, QListWidget, QListWidgetItem, QAbstractItemView, QSizePolicy, QSplitter, QGroupBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QObject
 from PyQt6.QtGui import QPixmap, QIcon
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -18,11 +18,12 @@ import pandas as pd
 from hdr_analysis.analyzer import HDRAnalyzer
 
 # 自定义日志处理器，将日志信息发送到GUI
-class QtHandler(logging.Handler):
+class QtHandler(QObject, logging.Handler):
     log_signal = pyqtSignal(str)
 
     def __init__(self):
-        super().__init__()
+        QObject.__init__(self)
+        logging.Handler.__init__(self)
         self.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
     def emit(self, record):
@@ -223,6 +224,7 @@ class MainWindow(QWidget):
         self.log_level_label = QLabel("日志等级:")
         self.log_level_combo = QComboBox()
         self.log_level_combo.addItems(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
+        self.log_level_combo.setCurrentText('INFO')  # 设置默认日志等级
         self.log_level_combo.currentTextChanged.connect(self.change_log_level)
 
         layout.addWidget(self.log_level_label)
@@ -237,11 +239,11 @@ class MainWindow(QWidget):
         self.diff_image_checkbox = QCheckBox("差异图像生成")
         self.brightness_3d_checkbox = QCheckBox("3D亮度图生成")
 
-        # 默认选中所有分析
+        # 默认选中统计分析和频域分析，取消3D亮度图生成
         self.stat_analysis_checkbox.setChecked(True)
         self.freq_analysis_checkbox.setChecked(True)
         self.diff_image_checkbox.setChecked(True)
-        self.brightness_3d_checkbox.setChecked(False)  # 默认不生成3D亮度图
+        self.brightness_3d_checkbox.setChecked(False)  # 用户可以选择是否生成
 
         analysis_layout.addWidget(self.stat_analysis_checkbox)
         analysis_layout.addWidget(self.freq_analysis_checkbox)
@@ -478,7 +480,7 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "警告", "分析报告中没有有效的数据。")
             return
 
-        # 设置Matplotlib使用simhei字体
+        # 设置Matplotlib使用SimHei字体
         plt.rcParams['font.family'] = 'SimHei'
         plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
