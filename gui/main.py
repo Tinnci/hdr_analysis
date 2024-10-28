@@ -97,7 +97,7 @@ class ImageDisplay(QWidget):
 
 # 用于显示每个数据集的分析结果（多张图像）
 class ResultDisplay(QWidget):
-    def __init__(self, analysis_dir, set_name):
+    def __init__(self, analysis_dir, set_name, psnr=None, ssim=None):
         super().__init__()
 
         self.analysis_dir = analysis_dir
@@ -110,6 +110,12 @@ class ResultDisplay(QWidget):
         self.title_label = QLabel(f"数据集: {set_name}")
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(self.title_label)
+
+        # PSNR 和 SSIM 显示
+        if psnr is not None and ssim is not None:
+            self.metrics_label = QLabel(f"PSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}")
+            self.metrics_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.layout.addWidget(self.metrics_label)
 
         # 图像布局
         self.image_layout = QHBoxLayout()
@@ -187,16 +193,14 @@ class MainWindow(QWidget):
     def create_image_selection(self):
         # 图像选择列表
         self.image_list = QListWidget()
-        self.image_list.setViewMode(QListWidget.ViewMode.IconMode)
-        self.image_list.setIconSize(QSize(100, 100))
-        self.image_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.image_list.setViewMode(QListWidget.ViewMode.ListMode)
         self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.image_list.setSpacing(10)
         self.image_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # 添加到布局中
         image_selection_layout = QVBoxLayout()
-        image_selection_layout.addWidget(QLabel("选择要分析的照片:"))
+        image_selection_layout.addWidget(QLabel("选择要分析的图像对:"))
         image_selection_layout.addWidget(self.image_list)
 
         # 使用 QSplitter 使图像选择部分可调整大小
@@ -214,7 +218,7 @@ class MainWindow(QWidget):
         # 图像类型选择
         self.image_type_label = QLabel("图像类型:")
         self.image_type_combo = QComboBox()
-        self.image_type_combo.addItems(['original', 'fused', 'both'])
+        self.image_type_combo.addItems(['both', 'original', 'fused'])
         self.image_type_combo.currentIndexChanged.connect(self.update_image_selection_based_on_type)
 
         layout.addWidget(self.image_type_label)
@@ -332,29 +336,42 @@ class MainWindow(QWidget):
         current_type = self.image_type_combo.currentText()
 
         # 根据图像类型过滤文件
-        if current_type == 'original':
+        originals = []
+        fused = []
+        if current_type in ['original', 'both']:
             # 选择不以 _fused 结尾的图像
-            image_files = [f for f in os.listdir(input_dir)
-                           if f.lower().endswith(supported_formats) and not (f.lower().endswith('_fused.jpg') or f.lower().endswith('_fused.png'))]
-        elif current_type == 'fused':
+            originals = [f for f in os.listdir(input_dir)
+                         if f.lower().endswith(supported_formats) and not (f.lower().endswith('_fused.jpg') or f.lower().endswith('_fused.png'))]
+        if current_type in ['fused', 'both']:
             # 选择以 _fused 结尾的图像
-            image_files = [f for f in os.listdir(input_dir)
-                           if f.lower().endswith(supported_formats) and (f.lower().endswith('_fused.jpg') or f.lower().endswith('_fused.png'))]
-        else:
-            # both: 所有图像
-            image_files = [f for f in os.listdir(input_dir) if f.lower().endswith(supported_formats)]
+            fused = [f for f in os.listdir(input_dir)
+                     if f.lower().endswith(supported_formats) and (f.lower().endswith('_fused.jpg') or f.lower().endswith('_fused.png'))]
 
-        # 遍历输入目录中的图像文件
-        for filename in image_files:
-            filepath = os.path.join(input_dir, filename)
-            pixmap = QPixmap(filepath)
-            if pixmap.isNull():
-                continue  # 忽略无法加载的图像
-            icon = QIcon(pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-            item = QListWidgetItem(icon, filename)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)  # 默认选中
-            self.image_list.addItem(item)
+        if current_type == 'both':
+            # 配对原始图像和融合图像
+            original_set = set(originals)
+            fused_set = set([f.replace('_fused', '') for f in fused])
+            paired_names = original_set.intersection(fused_set)
+            for name in paired_names:
+                orig_filename = name + os.path.splitext([f for f in originals if f.startswith(name)][0])[1]
+                fused_filename = name + '_fused' + os.path.splitext([f for f in fused if f.startswith(name)][0])[1]
+                orig_path = os.path.join(input_dir, orig_filename)
+                fused_path = os.path.join(input_dir, fused_filename)
+                item = QListWidgetItem(f"{orig_filename} 和 {fused_filename}")
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked)  # 默认选中
+                item.setData(Qt.ItemDataRole.UserRole, (orig_path, fused_path))
+                self.image_list.addItem(item)
+        else:
+            # 单独处理原始或融合图像
+            image_files = originals if current_type == 'original' else fused
+            for filename in image_files:
+                filepath = os.path.join(input_dir, filename)
+                item = QListWidgetItem(filename)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked)  # 默认选中
+                item.setData(Qt.ItemDataRole.UserRole, (filepath, filepath))  # 原始和融合路径相同
+                self.image_list.addItem(item)
 
     def update_image_selection_based_on_type(self):
         """
@@ -383,12 +400,13 @@ class MainWindow(QWidget):
         input_dir = self.input_path.text()
         output_dir = self.output_path.text()
 
-        # 获取选中的图像文件
+        # 获取选中的图像文件对
         selected_images = []
         for index in range(self.image_list.count()):
             item = self.image_list.item(index)
             if item.checkState() == Qt.CheckState.Checked:
-                selected_images.append(os.path.join(input_dir, item.text()))
+                paths = item.data(Qt.ItemDataRole.UserRole)
+                selected_images.append(paths)
 
         # 获取用户选择的分析选项
         selected_analyses = {
@@ -404,7 +422,7 @@ class MainWindow(QWidget):
             return
 
         if not selected_images:
-            QMessageBox.warning(self, "警告", "请至少选择一张要分析的照片。")
+            QMessageBox.warning(self, "警告", "请至少选择一对要分析的图像。")
             return
 
         # 设置默认输出目录为 input_dir/output
@@ -460,7 +478,9 @@ class MainWindow(QWidget):
         # 显示每个结果集的图像
         for result in results:
             set_name = result.get('Set', 'Unknown')
-            result_display = ResultDisplay(self.analyzer.analysis_dir, set_name)
+            psnr = result.get('PSNR')
+            ssim = result.get('SSIM')
+            result_display = ResultDisplay(self.analyzer.analysis_dir, set_name, psnr, ssim)
             self.image_layout_inner.addWidget(result_display)
 
         # 统计数据可视化

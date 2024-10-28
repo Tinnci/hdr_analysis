@@ -19,9 +19,9 @@ from .frequency_analysis import FrequencyAnalyzer
 from .statistics_analysis import StatisticsAnalyzer
 from .visualization import Visualizer
 
-def analyze_image(image_path, output_dir, image_type, analyses, font_path):
+def analyze_image_pair(original_image_path, fused_image_path, output_dir, analyses, font_path):
     """
-    分析单个图像，并返回结果字典。
+    分析图像对，并返回结果字典。
     """
     # 设置日志
     logger = logging.getLogger('HDRAnalyzer')
@@ -32,7 +32,7 @@ def analyze_image(image_path, output_dir, image_type, analyses, font_path):
     # 初始化字体
     if not os.path.exists(font_path):
         logger.error(f"指定的字体文件不存在: {font_path}")
-        return {'Set': os.path.basename(image_path), 'Error': f"字体文件不存在: {font_path}"}
+        return {'Set': os.path.basename(original_image_path), 'Error': f"字体文件不存在: {font_path}"}
     from matplotlib.font_manager import FontProperties
     font = FontProperties(fname=font_path, size=12)
 
@@ -40,29 +40,38 @@ def analyze_image(image_path, output_dir, image_type, analyses, font_path):
     stats_analyzer = StatisticsAnalyzer(logger=logger)
     visualizer = Visualizer(analysis_dir=output_dir, font=font, logger=logger)
 
-    filename = os.path.basename(image_path)
+    filename = os.path.basename(original_image_path)
     set_name, _ = os.path.splitext(filename)
     result = {'Set': set_name}
 
-    # 读取图像
-    image = preprocessor.correct_image_orientation(image_path)
-    if image is None:
-        logger.warning(f"无法读取图像: {image_path}")
-        return {'Set': set_name, 'Error': f"无法读取图像: {image_path}"}
+    # 读取原始图像
+    original_image = preprocessor.correct_image_orientation(original_image_path)
+    if original_image is None:
+        logger.warning(f"无法读取图像: {original_image_path}")
+        return {'Set': set_name, 'Error': f"无法读取图像: {original_image_path}"}
+
+    # 读取融合图像
+    fused_image = preprocessor.correct_image_orientation(fused_image_path)
+    if fused_image is None:
+        logger.warning(f"无法读取图像: {fused_image_path}")
+        return {'Set': set_name, 'Error': f"无法读取图像: {fused_image_path}"}
 
     if analyses.get('brightness_3d', False):
         # 生成3D亮度图
-        visualizer.generate_3d_brightness_plot(image, set_name)
+        visualizer.generate_3d_brightness_plot(fused_image, set_name)
 
     if analyses.get('statistical', False):
         # 统计分析
-        input_stats = stats_analyzer.compute_statistics(image)
-        for key, value in input_stats.items():
-            result[f'Input_{key}'] = value
+        original_stats = stats_analyzer.compute_statistics(original_image)
+        fused_stats = stats_analyzer.compute_statistics(fused_image)
+        for key, value in original_stats.items():
+            result[f'Original_{key}'] = value
+        for key, value in fused_stats.items():
+            result[f'Fused_{key}'] = value
 
     if analyses.get('frequency', False):
         # 频域分析
-        power_spectrum, magnitude_spectrum = freq_analyzer.compute_power_spectrum(image)
+        power_spectrum, magnitude_spectrum = freq_analyzer.compute_power_spectrum(fused_image)
         if power_spectrum is not None:
             edge_preservation = freq_analyzer.compute_edge_preservation(power_spectrum)
             freq_entropy = freq_analyzer.compute_frequency_entropy(power_spectrum)
@@ -74,21 +83,21 @@ def analyze_image(image_path, output_dir, image_type, analyses, font_path):
             freq_analyzer.save_entropy_plot(freq_entropy, set_name)
 
     if analyses.get('difference', False):
-        # 生成差异图像（与自身无差异，可视化为零图）
-        visualizer.generate_difference_image(image, image, set_name)
+        # 生成差异图像（原始图像与融合图像的差异）
+        visualizer.generate_difference_image(original_image, fused_image, set_name)
 
     if analyses.get('statistical', False) or analyses.get('frequency', False):
-        # 计算PSNR和SSIM（与自身无差异，应为最高值）
+        # 计算PSNR和SSIM
         try:
-            psnr = stats_analyzer.calculate_psnr(image, image)
-            ssim = stats_analyzer.calculate_ssim(image, image)
+            psnr = stats_analyzer.calculate_psnr(original_image, fused_image)
+            ssim = stats_analyzer.calculate_ssim(original_image, fused_image)
             result['PSNR'] = psnr
             result['SSIM'] = ssim
         except Exception as e:
             logger.error(f"计算 PSNR/SSIM 失败: {e}")
 
     # 释放内存
-    del image
+    del original_image, fused_image
     gc.collect()
 
     return result
@@ -135,12 +144,51 @@ class HDRAnalyzer:
         self.logger.debug(f"当前CPU使用率: {cpu_usage}%, 内存使用率: {mem_usage}%")
         return cpu_usage < self.cpu_threshold and mem_usage < self.mem_threshold
 
+    def pair_images(self):
+        """
+        根据命名规则配对原始图像和融合图像。
+        假设融合图像的命名为原始图像名后加'_fused'。
+        例如，'image1.jpg'和'image1_fused.jpg'。
+        """
+        originals = {}
+        fused = {}
+        for img in self.selected_images:
+            filename = os.path.basename(img)
+            name, ext = os.path.splitext(filename)
+            if name.endswith('_fused'):
+                base_name = name[:-6]  # 去除'_fused'
+                fused[base_name] = img
+            else:
+                originals[name] = img
+
+        # 创建配对列表
+        paired = []
+        for name, orig_path in originals.items():
+            fused_path = fused.get(name)
+            if fused_path:
+                paired.append((orig_path, fused_path))
+            else:
+                self.logger.warning(f"未找到融合图像对应的原始图像: {orig_path}")
+        return paired
+
     def analyze(self):
         """执行HDR图像分析，包括频域分析和统计分析，或仅生成斜向3D亮度图。"""
         results = []
-        images_to_process = self.selected_images
-
-        self.logger.info(f"准备处理 {len(images_to_process)} 张图像。")
+        if self.image_type == 'both':
+            # 需要配对原始图像和融合图像
+            paired_images = self.pair_images()
+            self.logger.info(f"准备处理 {len(paired_images)} 对图像。")
+        elif self.image_type == 'original':
+            # 仅处理原始图像
+            paired_images = [(img, img) for img in self.selected_images]
+            self.logger.info(f"准备处理 {len(paired_images)} 张原始图像。")
+        elif self.image_type == 'fused':
+            # 仅处理融合图像
+            paired_images = [(img, img) for img in self.selected_images]
+            self.logger.info(f"准备处理 {len(paired_images)} 张融合图像。")
+        else:
+            self.logger.error(f"未知的image_type: {self.image_type}")
+            return
 
         # 设置中文字体路径
         font_path = os.path.join(os.path.dirname(__file__), '..', 'gui', 'resources', 'simhei.ttf')  # 修改字体路径
@@ -152,7 +200,7 @@ class HDRAnalyzer:
             # 使用 ProcessPoolExecutor 进行并行处理
             with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = {}
-                for image_path in images_to_process:
+                for orig_path, fused_path in paired_images:
                     # 等待资源可用
                     wait_start_time = time.time()
                     while not self.is_resource_available():
@@ -165,21 +213,21 @@ class HDRAnalyzer:
 
                     # 再次检查资源是否可用
                     if not self.is_resource_available():
-                        self.logger.error(f"资源使用率仍高于阈值，跳过提交任务: {image_path}")
+                        self.logger.error(f"资源使用率仍高于阈值，跳过提交任务: {orig_path} 和 {fused_path}")
                         continue
 
                     # 提交任务
-                    future = executor.submit(analyze_image, image_path, self.output_dir, self.image_type, self.analyses, font_path)
-                    futures[future] = image_path
+                    future = executor.submit(analyze_image_pair, orig_path, fused_path, self.analysis_dir, self.analyses, font_path)
+                    futures[future] = (orig_path, fused_path)
 
-                for future in tqdm(as_completed(futures), total=len(futures), desc="Processing images"):
-                    image_path = futures[future]
+                for future in tqdm(as_completed(futures), total=len(futures), desc="Processing image pairs"):
+                    orig_path, fused_path = futures[future]
                     try:
                         result = future.result()
                         if result:
                             results.append(result)
                     except Exception as e:
-                        self.logger.error(f"处理图像 {image_path} 时发生未捕获的错误: {e}")
+                        self.logger.error(f"处理图像对 {orig_path} 和 {fused_path} 时发生未捕获的错误: {e}")
         except KeyboardInterrupt:
             self.logger.info("检测到键盘中断 (Ctrl+C)，正在尝试终止所有进程...")
             executor.shutdown(wait=False, cancel_futures=True)
@@ -209,10 +257,10 @@ class HDRAnalyzer:
                 overall['PSNR'] = np.nanmean([res['PSNR'] for res in results if res.get('PSNR') is not None])
                 overall['SSIM'] = np.nanmean([res['SSIM'] for res in results if res.get('SSIM') is not None])
 
-                # 获取所有Input统计键
+                # 获取所有Original和Fused统计键
                 if results:
-                    input_mean_keys = [key for key in results[0].keys() if key.startswith('Input_') and 'mean' in key]
-                    for key in input_mean_keys:
+                    stat_keys = [key for key in results[0].keys() if key.startswith('Original_') or key.startswith('Fused_')]
+                    for key in stat_keys:
                         overall[key] = np.nanmean([res[key] for res in results if key in res and res[key] is not None])
 
             # 频域分析
